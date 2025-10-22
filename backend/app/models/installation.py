@@ -17,7 +17,7 @@ class Installation(Base):
     last_data_timestamp = Column(DateTime, index=True)
 
     # Relationship with production data
-    production_data = relationship("production_data", back_populates="installation")
+    production_data = relationship("app.models.energy.ProductionData", back_populates="installation")
 
     def to_dict(self):
         return {

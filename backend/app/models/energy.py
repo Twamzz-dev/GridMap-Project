@@ -15,7 +15,7 @@ class ProductionData(Base):
     status = Column(String(50), default="active")
 
     # Relationship with installation
-    installation = relationship("Installation", back_populates="production_data")
+    installation = relationship("app.models.installation.Installation", back_populates="production_data")
 
     def to_dict(self):
         return {

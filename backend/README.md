@@ -60,6 +60,39 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Start Redis Server
+```bash
+# Install Redis (Ubuntu/Debian)
+sudo apt update
+sudo apt install redis-server
+
+# Start Redis
+sudo systemctl start redis
+# or
+redis-server
+
+# Verify Redis is running
+redis-cli ping  # Should return "PONG"
+```
+
+### Run Celery Workers
+You need two terminals for Celery:
+
+```bash
+# Terminal 1: Start Celery Worker
+cd backend
+celery -A app.tasks worker --loglevel=info
+
+# Terminal 2: Start Celery Beat (for scheduled tasks)
+cd backend
+celery -A app.tasks beat --loglevel=info
+```
+
+The simulation will now run automatically every hour. To manually trigger a simulation:
+```bash
+celery -A app.tasks call app.tasks.simulate_and_store_realtime_data
+```
+
 - Create `.env` file from `.env.example` and configure PostgreSQL credentials
 - Run Alembic migrations
 - Seed database with installations and historical data
