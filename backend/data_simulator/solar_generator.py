@@ -2,8 +2,16 @@
 import random
 from datetime import datetime, timedelta
 from typing import List, Dict
+import os
+import sys
+
+# Add the parent directory to Python path to make imports work
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
 from constants import *
-from utils import *
+from utils import * 
 
 
 class SolarDataSimulator:
