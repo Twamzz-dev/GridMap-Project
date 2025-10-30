@@ -76,27 +76,28 @@ def simulate_and_store_realtime_data(self):
                 )
                 
                 for hour_data in data:
-                    # Create and store in database
+                    # Create and store in database (support extended fields)
                     record = ProductionData(
                         installation_id=inst.id,
-                        timestamp=hour_data['timestamp'],
-                        power_kw=hour_data['power_kw'],
-                        weather=hour_data['weather'],
-                        solar_elevation=hour_data['solar_elevation'],
-                        energy_kwh=hour_data['power_kw'],  # Assuming 1-hour intervals
+                        timestamp=hour_data["timestamp"],
+                        power_kw=hour_data["power_kw"],
+                        weather=hour_data["weather"],
+                        solar_elevation=hour_data.get("solar_elevation", None),
+                        energy_kwh=hour_data["power_kw"],
                         status=inst.status
                     )
                     db.add(record)
-                    
-                    # Cache in Redis
+                    # Cache in Redis with extra context
                     cache_data = {
-                        'installation_id': inst.id,
-                        'timestamp': hour_data['timestamp'].isoformat(),
-                        'power_kw': hour_data['power_kw'],
-                        'weather': hour_data['weather'],
-                        'solar_elevation': hour_data['solar_elevation'],
-                        'energy_kwh': hour_data['power_kw'],
-                        'status': inst.status
+                        "installation_id": inst.id,
+                        "timestamp": hour_data["timestamp"].isoformat(),
+                        "power_kw": hour_data["power_kw"],
+                        "weather": hour_data["weather"],
+                        "solar_elevation": hour_data.get("solar_elevation"),
+                        "energy_kwh": hour_data["power_kw"],
+                        "cell_temp_c": hour_data.get("cell_temp_c"),
+                        "soiling_days": hour_data.get("soiling_days"),
+                        "status": inst.status
                     }
                     cache_installation_data(inst.id, cache_data)
                 

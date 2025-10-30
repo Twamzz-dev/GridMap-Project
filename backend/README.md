@@ -175,6 +175,4 @@ MIT License – Free to use, modify, and distribute.
 
 ## 🙌 Acknowledgements
 
-Thanks to Power Learn Project and the team for inspiration and support.
-
----
+Thanks to Power Learn Project and the GridMap team for inspiration and support.

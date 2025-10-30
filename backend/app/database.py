@@ -23,3 +23,10 @@ SessionLocal = sessionmaker(
 
 # Export these for use in other modules
 __all__ = ['Base', 'SessionLocal', 'engine']
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
