@@ -9,18 +9,36 @@ from datetime import datetime, timedelta, timezone
 import os
 import json
 from collections import defaultdict
+from app.services.data_aggregation import aggregate_energy_over_interval
+from app.services.cache import get_cache, set_cache
+from app.services.data_aggregation import get_energy_summary
+from app.services.data_aggregation import group_energy_by_installation
+from app.services.data_aggregation import compute_performance_metrics
 
 router = APIRouter()
 
 @router.get("/energy")
 def get_energy_output(db: Session = Depends(get_db)):
-    """Get all production data records."""
-    return db.query(ProductionData).all()
+    cache_key = "energy:all"
+    data = get_cache(cache_key)
+    if data is not None:
+        return data
+    result = db.query(ProductionData).all()
+    # convert to dict for json serializability (if needed)
+    out = [r.to_dict() for r in result]
+    set_cache(cache_key, out, ex=30)  # cache for 30s
+    return out
 
 @router.get("/energy/installation/{installation_id}")
 def get_energy_by_installation(installation_id: int, db: Session = Depends(get_db)):
-    """Get production data for a specific installation."""
-    return db.query(ProductionData).filter(ProductionData.installation_id == installation_id).all()
+    cache_key = f"energy:installation:{installation_id}"
+    data = get_cache(cache_key)
+    if data is not None:
+        return data
+    result = db.query(ProductionData).filter(ProductionData.installation_id == installation_id).all()
+    out = [r.to_dict() for r in result]
+    set_cache(cache_key, out, ex=60)  # cache per install 1 minute
+    return out
 
 @router.get("/energy/installations")
 def get_installations(db: Session = Depends(get_db)):
@@ -28,27 +46,8 @@ def get_installations(db: Session = Depends(get_db)):
     return db.query(Installation).all()
 
 @router.get("/energy/stats/summary")
-def get_energy_summary(db: Session = Depends(get_db)):
-    """Get summary statistics of production data."""
-    records = db.query(ProductionData).all()
-    installations = db.query(Installation).all()
-    
-    if not records:
-        return {"message": "No production data available"}
-    
-    total_energy = sum(record.energy_kwh for record in records if record.energy_kwh)
-    total_power = sum(record.power_kw for record in records if record.power_kw)
-    installation_count = len(installations)
-    active_installations = len([inst for inst in installations if inst.status.value == "active"])
-    
-    return {
-        "total_energy_kwh": round(total_energy, 2),
-        "total_power_kw": round(total_power, 2),
-        "total_records": len(records),
-        "total_installations": installation_count,
-        "active_installations": active_installations,
-        "average_energy_per_record": round(total_energy / len(records), 2) if records else 0
-    }
+def get_energy_summary_endpoint(db: Session = Depends(get_db)):
+    return get_energy_summary(db)
 
 
 @router.get("/energy/aggregate")
@@ -66,42 +65,15 @@ def aggregate_energy(
         end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     if start is None:
         start = end - timedelta(days=1)
-
-    q = (
-        db.query(ProductionData)
-        .filter(ProductionData.timestamp >= start)
-        .filter(ProductionData.timestamp <= end)
-    )
-    rows = q.all()
-
-    if not rows:
-        return {"buckets": [], "interval": interval}
-
-    buckets: Dict[datetime, Dict[str, float]] = defaultdict(lambda: {"energy_kwh": 0.0, "power_kw_sum": 0.0, "power_count": 0})
-
-    def bucket_start(ts: datetime) -> datetime:
-        if interval == "hour":
-            return ts.replace(minute=0, second=0, microsecond=0, tzinfo=ts.tzinfo)
-        # day
-        return ts.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ts.tzinfo)
-
-    for r in rows:
-        b = bucket_start(r.timestamp)
-        buckets[b]["energy_kwh"] += float(r.energy_kwh or 0.0)
-        if r.power_kw is not None:
-            buckets[b]["power_kw_sum"] += float(r.power_kw)
-            buckets[b]["power_count"] += 1
-
-    out = []
-    for b_start, agg in sorted(buckets.items()):
-        avg_power_kw = (agg["power_kw_sum"] / agg["power_count"]) if agg["power_count"] else 0.0
-        out.append({
-            "bucket_start": b_start.isoformat(),
-            "total_energy_kwh": round(agg["energy_kwh"], 3),
-            "avg_power_kw": round(avg_power_kw, 3),
-        })
-
-    return {"interval": interval, "buckets": out, "start": start.isoformat(), "end": end.isoformat()}
+    # Compose cache key
+    cache_key = f"agg:{interval}:{start.isoformat()}:{end.isoformat()}"
+    data = get_cache(cache_key)
+    if data is not None:
+        return data
+    buckets = aggregate_energy_over_interval(db, start, end, interval)
+    out = {"interval": interval, "buckets": buckets, "start": start.isoformat(), "end": end.isoformat()}
+    set_cache(cache_key, out, ex=600)
+    return out
 
 
 @router.get("/energy/today")
@@ -146,6 +118,37 @@ def energy_today(db: Session = Depends(get_db)):
         "systems_active": systems_active,
         "timestamp": now.isoformat(),
     }
+
+
+@router.get("/energy/leaderboard")
+def get_energy_leaderboard(
+    start: datetime = Query(None),
+    end: datetime = Query(None),
+    limit: int = Query(10),
+    db: Session = Depends(get_db),
+):
+    # Defaults to last 24 hours
+    if end is None:
+        end = datetime.now(timezone.utc)
+    if start is None:
+        start = end - timedelta(days=1)
+    agg = group_energy_by_installation(db, start, end)
+    leaderboard = sorted(agg.values(), key=lambda x: x["total_energy_kwh"], reverse=True)
+    return leaderboard[:limit]
+
+
+@router.get("/performance/metrics")
+def get_performance_metrics(
+    start: datetime = Query(None),
+    end: datetime = Query(None),
+    db: Session = Depends(get_db),
+):
+    # Default to last 365 days
+    if end is None:
+        end = datetime.now(timezone.utc)
+    if start is None:
+        start = end - timedelta(days=365)
+    return compute_performance_metrics(db, start, end)
 
 
 @router.get("/map/installations")
@@ -207,4 +210,26 @@ def map_installations(db: Session = Depends(get_db)):
                 "properties": properties,
             })
 
+    return {"type": "FeatureCollection", "features": features}
+
+@router.get("/map/installations_mini")
+def map_installations_mini(db: Session = Depends(get_db)):
+    """Lightweight endpoint for map rendering: returns minimal fields for each installation as GeoJSON Features."""
+    installations = db.query(Installation).all()
+    features = []
+    for inst in installations:
+        feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [inst.location_lng, inst.location_lat]
+            },
+            "properties": {
+                "installation_id": inst.id,
+                "name": inst.name,
+                "capacity_kw": inst.capacity_kw,
+                "status": inst.status,
+            }
+        }
+        features.append(feature)
     return {"type": "FeatureCollection", "features": features}
